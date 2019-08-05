@@ -1,0 +1,401 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>//I2C protocol for chip to chip communication
+LiquidCrystal_I2C lcd(0x27, 16, 2); // set the LCD address to 0x27 for a 16 chars and 2 line display
+#include<SoftwareSerial.h>//to interface esp8266 with arduino through serial communication
+SoftwareSerial esp8266Module(2, 3);//set the software serial pins RX=2,TX=3
+//#define  esp8266Module wifi
+#define ir1 4
+#define ir2 5
+#define ir3 8
+
+#define ldr1 A0
+#define ldr2 A1
+#define gas A2
+#define bright 11
+ 
+#define relay1 6
+#define relay2 9
+
+#include "DHT.h" //Digital humidity and temp sensor
+#define DHTPIN 7
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+
+String smsout = "", msg;
+//String usernum =   "7349221777";
+String usernum =   "9087004610";
+
+String network = "OnePlus 5T";
+String password = "ani123456";
+#define IP "184.106.153.149" //cloud's static ip address
+String GET = "GET /update?api_key=ZZD76ZDZ01V51HX2";
+
+byte degree[8] = {
+  0b01100,
+  0b10010,
+  0b10010,
+  0b01100,
+  0b00000,
+  0b00000,
+  0b00000,
+  0b00000
+};
+
+float temp;
+int hum;
+
+int ir1_r, ir2_r, ir3_r, ldr1_r, ldr2_r, gas_r;
+int count, a, b, sec1, devstat, ligBright;
+void setup() //setup code here, to run once:
+{
+  pinMode(ir1, INPUT);
+  pinMode(ir2, INPUT);
+  pinMode(ir3, INPUT);
+  //  pinMode(gas, INPUT);
+  pinMode(relay1, OUTPUT);
+  pinMode(relay2, OUTPUT);
+  digitalWrite(relay1, 1);
+  digitalWrite(relay2, 1);
+  Serial.begin(9600);
+  esp8266Module.begin(115200);
+  dht.begin();
+  lcd.init();
+  lcd.backlight();
+  lcd.createChar(0, degree);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("---SMART CITY---");
+  lcd.setCursor(0, 1);
+  lcd.print("----------------");
+  delay(2000);
+  lcd.clear();
+
+  setupEsp8266();
+  delay(1500);
+  lcd.clear();
+
+}
+
+void loop()
+{ //main code here, to run repeatedly:
+  sec1++;
+  temp = dht.readTemperature();
+  hum = dht.readHumidity();
+  gas_r = analogRead(gas);
+  ir1_r = digitalRead(ir1);
+  ir2_r = digitalRead(ir2);
+  ir3_r = digitalRead(ir3);
+  ldr1_r = analogRead(ldr1);
+  //  b = map(ldr1_r, 0, 1023, 100, 255);
+  if (gas_r >= 50) {
+    gas_r = 50;
+  }
+  gas_r = map(gas_r, 0, 50, 0, 100);
+
+  ldr2_r = analogRead(ldr2);
+  //  Serial.println(gas_r);
+  if (( ldr1_r > 300 ) and devstat == 0)
+  {
+    devstat = 1;
+    //    Serial.println("RELAY1 ON");
+    digitalWrite(relay1, LOW);
+
+    //    delay(2000);
+    send2();
+    sec1 = 0;
+  }
+  else if ( (ldr1_r < 300 ) and devstat == 1)
+  { devstat = 0;
+    digitalWrite(relay1, HIGH);
+  }
+  ldr1_r = map(ldr1_r, 0, 1023, 0, 100);
+  if (gas_r >= 50)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("-GAS LEVEL HIGH-");
+    delay(2500);
+    lcd.clear();
+  }
+  if (ir1_r == 1) {
+    ligBright = 100;
+    analogWrite (bright, 255);
+  }
+  else {
+    ligBright = 30;
+    analogWrite (bright, 50);
+  }
+
+
+  lcd.setCursor(0, 0);
+  lcd.print("T:               ");
+  lcd.setCursor(2, 0);
+  lcd.print(temp);
+  lcd.setCursor(7, 0);
+  lcd.write(byte(0));
+  lcd.setCursor(10, 0);
+  lcd.print("H:");
+  lcd.setCursor(12, 0);
+  lcd.print(hum);
+  lcd.setCursor(14, 0);
+  lcd.print("%");
+
+  if (ir2_r == 1)
+  {
+    a = 1;
+    delay(50);
+  }
+  if (ir3_r == 1 and a == 1)
+  {
+    a = 2;
+    delay(50);
+  }
+  if (a == 1)
+  {
+    count++;
+    //    Serial.println(count);
+    delay(20);
+  }
+  if (count >= 50 and a == 2)
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("               ");
+    lcd.setCursor(0, 1);
+    lcd.print("NORMAL SPEED");
+    //    Serial.println("Normal Speed");
+    count = 0;
+    //    Serial.println(count);
+    a = 0;
+    delay(500);
+    lcd.clear();
+
+  }
+  else if ( count <= 50 and a == 2)
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("               ");
+    lcd.setCursor(0, 1);
+    lcd.print("SPEED HIGH");
+    delay(500);
+    smsout = "HIGH SPPED DETECT - TN01B0084";
+    Serial.println(smsout);
+    SendSmS(usernum, smsout, "Sending SMS");
+    //    SendSmS(usernum2, smsout, "Sending SMS");
+    lcd.clear();
+    count = 0;
+    //    Serial.println(count);
+    a = 0;
+  }
+
+  if (sec1 > 240)
+  {
+    lcd.setCursor(0, 0);
+    lcd.print("IOT DATA:");
+    lcd.setCursor(0, 1);
+    lcd.print("Sending.........");
+    delay(500);
+    send2();
+    sec1 = 0;
+    lcd.clear();
+  }
+}
+void send2() {
+
+  updateTemp(String(temp), String(hum), String(gas_r), String(ldr1_r), String(devstat), String(ligBright));
+}
+//-------------------------------------------------------------------
+// Following function setup the esp8266, put it in station made and
+// connect to wifi access point.
+//------------------------------------------------------------------
+void setupEsp8266()
+{
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("----Waiting-----");
+  lcd.setCursor(0, 1);
+  lcd.print("---For a while---");
+
+  esp8266Module.println(F("AT+RST"));
+  delay(3000);
+  if (esp8266Module.find("OK"))
+  {
+    Serial.println("Device Found");
+    Serial.println("Changing to espmode");
+
+
+    changingMode();
+    delay(5000);
+
+    connectToWiFi(); delay(2000);
+
+  }
+  else
+  {
+
+    Serial.println("Device not found");
+    setupEsp8266();
+  }
+}
+
+//-------------------------------------------------------------------
+// Following function sets esp8266 to station mode
+//-------------------------------------------------------------------
+bool changingMode()
+{
+  esp8266Module.println(F("AT+CWMODE=1"));
+  if (esp8266Module.find("OK"))
+  {
+
+    Serial.println("Mode changed");
+
+    return true;
+  }
+  else if (esp8266Module.find("NO CHANGE")) {
+
+    Serial.println("Already in mode 1");
+
+    return true;
+  }
+  else
+  {
+
+    Serial.println("Error while changing mode");
+    changingMode();
+
+  }
+}
+
+//-------------------------------------------------------------------
+// Following function connects esp8266 to wifi access point
+//-------------------------------------------------------------------
+bool connectToWiFi()
+{
+
+  Serial.println("Trying To connect with Wifi");
+
+  String cmd = F("AT+CWJAP=\"");
+  cmd += network;
+  cmd += F("\",\"");
+  cmd += password;
+  cmd += F("\"");
+  esp8266Module.println(cmd);
+
+  Serial.println(esp8266Module.readString());
+  delay(4000);
+  if (esp8266Module.find("OK"))
+  {
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("-WiFi-Connected-");
+    lcd.setCursor(0, 1);
+    lcd.print("Network:");
+    lcd.setCursor(8, 1);
+    lcd.print(network);
+    delay(2000);
+    lcd.clear();
+    Serial.println("Connected to Network");
+
+    return true;
+  }
+  else
+  {
+
+    Serial.println("Couldn't connect to Network");
+
+    connectToWiFi();
+  }
+
+
+}
+
+void updateTemp(String voltage1, String voltage2, String voltage3, String voltage4, String voltage5, String voltage6)
+{
+  String cmd = "AT+CIPSTART=\"TCP\",\"";
+  cmd += IP;
+  cmd += "\",80";
+  esp8266Module.println(cmd);
+  delay(5000);
+  if (esp8266Module.find("Error")) {
+
+    Serial.println("ERROR while SENDING");
+
+    return;
+  }
+  cmd = GET + "&field1=" + voltage1 + "&field2=" + voltage2 + "&field3=" + voltage3 + "&field4=" + voltage4 + "&field5=" + voltage5 + "&field6=" + voltage6 + "\r\n";
+
+  esp8266Module.print("AT+CIPSEND=");
+  esp8266Module.println(cmd.length());
+  delay(15000);
+  if (esp8266Module.find(">"))
+  {
+    esp8266Module.print(cmd);
+
+    Serial.println("Data sent");
+
+  } else
+  {
+    esp8266Module.println("AT+CIPCLOSE");
+
+    Serial.println("Connection closed");
+
+  }
+}
+void SendSmS( String NuM, String MsG, String LcD)
+{
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(LcD);
+  lcd.setCursor(0, 1);
+  lcd.print(".");
+  Serial.println("AT");
+  lcd.print(".");
+  delay(1000);
+  lcd.print(".");
+  Serial.println("AT+CMGF=1");    //Sets the Serial Module in Text Mode
+  lcd.print(".");
+  delay(1000);
+  lcd.print("."); // Delay of 1000 milli seconds or 1 second
+  Serial.println("AT+CMGS=\"" + NuM + "\"\r"); //
+  lcd.print(".");
+  delay(1000);
+  lcd.print(".");
+
+  Serial.print(MsG);
+
+  delay(1000);
+  lcd.print(".");
+  Serial.println((char)26);
+  lcd.print(".");
+  delay(500);
+  lcd.print(".");
+  delay(500);
+  lcd.print(".");
+  delay(500);
+  lcd.print(".");
+  delay(500);
+  lcd.setCursor(0, 0);
+  lcd.print("Msg Sent !!!       ");
+  delay(150);
+  lcd.setCursor(11, 1);
+  lcd.print(".");
+  delay(250);
+  lcd.print(".");
+  delay(250);
+  lcd.print(".");
+  delay(250);
+  lcd.print(".");
+
+  delay(250);
+  lcd.print(".");
+  delay(250);
+  lcd.print(".");
+  delay(250);
+  lcd.print(".");
+  delay(250);
+  msg = "";
+  a = 0;
+  count = 0;
+
+}
